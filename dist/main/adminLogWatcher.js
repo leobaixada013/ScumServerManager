@@ -157,41 +157,71 @@ async function startAdminLogWatcher(fileManager) {
         const logFile = path.join(logsPath, logFileName);
         let offsets = await readOffsets();
         let lastOffset = offsets[logFileName] || 0;
+        let stream = null;
         try {
             const stat = await fs.stat(logFile);
+            if (stat.size < lastOffset) {
+                console.log(`[AdminLogWatcher] ♻️ Arquivo ${logFileName} foi reduzido (size: ${stat.size}, offset: ${lastOffset}). Reiniciando leitura.`);
+                lastOffset = 0;
+                offsets[logFileName] = 0;
+                const prefix = `${logFileName}|`;
+                let removedEvents = false;
+                for (const eventKey of Array.from(processedEvents)) {
+                    if (eventKey.startsWith(prefix)) {
+                        processedEvents.delete(eventKey);
+                        removedEvents = true;
+                    }
+                }
+                if (removedEvents) {
+                    await saveProcessedEvents(processedEvents);
+                    console.log(`[AdminLogWatcher] ♻️ Eventos processados limpos para ${logFileName}`);
+                }
+                await writeOffsets(offsets);
+            }
             if (stat.size <= lastOffset) {
                 console.log(`[AdminLogWatcher] 📄 Arquivo ${logFileName} sem mudanças (size: ${stat.size}, offset: ${lastOffset})`);
                 processingFiles.delete(logFileName);
                 return;
             }
-            console.log(`[AdminLogWatcher] 🚀 Processando arquivo: ${logFileName} (size: ${stat.size}, offset: ${lastOffset})`);
-            const content = await fs.readFile(logFile, 'utf8');
-            const lines = content.split(/\r?\n/);
+            const sizeDifference = stat.size - lastOffset;
+            console.log(`[AdminLogWatcher] 🚀 Processando arquivo: ${logFileName} (size: ${stat.size}, offset: ${lastOffset}, delta: ${sizeDifference})`);
+            stream = fs.createReadStream(logFile, { start: lastOffset, encoding: 'utf8' });
+            let buffer = '';
+            let bytesRead = 0;
             let processedCount = 0;
-            let newOffset = lastOffset;
-            for (const line of lines) {
-                if (line.trim().length > 0) {
-                    // Criar chave única para o evento
-                    const eventKey = `${logFileName}|${line}`;
-                    // Verificar se já foi processado
-                    if (processedEvents.has(eventKey)) {
-                        continue;
-                    }
-                    try {
-                        await fileManager.sendDiscordWebhookMessage(currentWebhook, line);
-                        console.log('[AdminLogWatcher] ✅ Linha enviada:', line);
-                        // Marcar como processado
-                        processedEvents.add(eventKey);
-                        processedCount++;
-                        // Delay de 2 segundos entre envios para evitar rate limit
-                        await sleep(2000);
-                    }
-                    catch (err) {
-                        console.error('[AdminLogWatcher] ❌ Erro ao enviar linha:', err);
-                    }
+            const handleLine = async (line) => {
+                if (line.trim().length === 0) {
+                    return;
                 }
-                newOffset += Buffer.byteLength(line + '\n', 'utf8');
+                const eventKey = `${logFileName}|${line}`;
+                if (processedEvents.has(eventKey)) {
+                    return;
+                }
+                try {
+                    await fileManager.sendDiscordWebhookMessage(currentWebhook, line);
+                    console.log('[AdminLogWatcher] ✅ Linha enviada:', line);
+                    processedEvents.add(eventKey);
+                    processedCount++;
+                    await sleep(2000);
+                }
+                catch (err) {
+                    console.error('[AdminLogWatcher] ❌ Erro ao enviar linha:', err);
+                }
+            };
+            for await (const chunk of stream) {
+                const data = typeof chunk === 'string' ? chunk : chunk.toString('utf8');
+                bytesRead += Buffer.byteLength(data, 'utf8');
+                buffer += data;
+                const lines = buffer.split(/\r?\n/);
+                buffer = lines.pop() ?? '';
+                for (const line of lines) {
+                    await handleLine(line);
+                }
             }
+            if (buffer.trim().length > 0) {
+                await handleLine(buffer);
+            }
+            const newOffset = lastOffset + bytesRead;
             offsets[logFileName] = newOffset;
             await writeOffsets(offsets);
             await saveProcessedEvents(processedEvents);
@@ -203,6 +233,9 @@ async function startAdminLogWatcher(fileManager) {
             console.error('[AdminLogWatcher] ❌ Erro ao ler arquivo de log:', err);
         }
         finally {
+            if (stream) {
+                stream.close();
+            }
             processingFiles.delete(logFileName);
         }
     }
