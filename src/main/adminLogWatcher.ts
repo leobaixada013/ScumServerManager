@@ -135,9 +135,30 @@ export async function startAdminLogWatcher(fileManager: FileManager) {
     const logFile = path.join(logsPath, logFileName);
     let offsets = await readOffsets();
     let lastOffset = offsets[logFileName] || 0;
-    
+
     try {
       const stat = await fs.stat(logFile);
+      if (stat.size < lastOffset) {
+        console.log(`[AdminLogWatcher] ♻️ Arquivo ${logFileName} foi reduzido (size: ${stat.size}, offset: ${lastOffset}). Reiniciando leitura.`);
+        lastOffset = 0;
+        offsets[logFileName] = 0;
+
+        const prefix = `${logFileName}|`;
+        let removedEvents = false;
+        for (const eventKey of Array.from(processedEvents)) {
+          if (eventKey.startsWith(prefix)) {
+            processedEvents.delete(eventKey);
+            removedEvents = true;
+          }
+        }
+
+        if (removedEvents) {
+          await saveProcessedEvents(processedEvents);
+          console.log(`[AdminLogWatcher] ♻️ Eventos processados limpos para ${logFileName}`);
+        }
+
+        await writeOffsets(offsets);
+      }
       if (stat.size <= lastOffset) {
         console.log(`[AdminLogWatcher] 📄 Arquivo ${logFileName} sem mudanças (size: ${stat.size}, offset: ${lastOffset})`);
         processingFiles.delete(logFileName);
