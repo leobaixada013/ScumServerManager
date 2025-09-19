@@ -265,7 +265,8 @@ export async function startChatGlobalWatcher(fileManager: FileManager) {
     processingFiles.add(logFileName);
     
     const logFile = path.join(logsPath, logFileName);
-    let lastOffset = (await readOffsets())[logFileName] || 0;
+    const offsets = await readOffsets();
+    let lastOffset = offsets[logFileName] || 0;
     let fd: fs.ReadStream | null = null;
     
     try {
