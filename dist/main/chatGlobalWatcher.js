@@ -287,7 +287,8 @@ async function startChatGlobalWatcher(fileManager) {
         // Marcar arquivo como sendo processado
         processingFiles.add(logFileName);
         const logFile = path.join(logsPath, logFileName);
-        let lastOffset = (await readOffsets())[logFileName] || 0;
+        const offsets = await readOffsets();
+        let lastOffset = offsets[logFileName] || 0;
         let fd = null;
         try {
             const stat = await fs.stat(logFile);
