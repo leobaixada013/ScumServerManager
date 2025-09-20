@@ -238,12 +238,16 @@ export async function startAdminLogWatcher(fileManager: FileManager) {
         const dateB = b.replace('admin_', '').replace('.log', '');
         return dateB.localeCompare(dateA);
       });
-      
+
       // Processar apenas o arquivo mais recente para determinar estado atual
       const mostRecentFile = adminLogs[0];
+      const offsets = await readOffsets();
       const logFile = path.join(logsPath, mostRecentFile);
       const stats = await fs.stat(logFile);
-      
+
+      offsets[mostRecentFile] = stats.size;
+      await writeOffsets(offsets);
+
       console.log(`[AdminLogWatcher] 🚀 Processando arquivo mais recente: ${mostRecentFile} (size: ${stats.size})`);
       
       const content = await fs.readFile(logFile, 'utf8');
